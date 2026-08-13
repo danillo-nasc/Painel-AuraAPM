@@ -13,19 +13,17 @@ st.set_page_config(
 # 2. Atualização automática da tela a cada 10 segundos (10.000 ms)
 st_autorefresh(interval=10000, key="datarefresh")
 
-# 3. URL da planilha do Google Sheets (Exportada automaticamente como CSV)
-# ⚠️ COLE O ID DA SUA PLANILHA AQUI:
-SPREADSHEET_ID = "SEU_ID_DA_PLANILHA_AQUI"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/1n5eYSf_Nt0Vs-qZ2yHeyqWuyJjl6SceYevAocJLmxTw/export?format=csv"
+# 3. URL da sua planilha do Google Sheets já no formato CSV
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1n5eYSf_Nt0Vs-qZ2yHeyqWuyJjl6SceYevAocJLmxTw/export?format=csv"
 
 # Função com cache rápido de 5s para ler os dados do Google Sheets
 @st.cache_data(ttl=5)
 def carregar_dados():
     try:
         df = pd.read_csv(SHEET_URL)
-        # Garante a formatação correta da coluna de Data
+        # ⚠️ TRATAMENTO DE ERRO: 'errors="coerce"' converte #ERROR! em nulo (NaT) sem derrubar a aplicação
         if "DATA" in df.columns:
-            df["DATA"] = pd.to_datetime(df["DATA"])
+            df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce")
         return df
     except Exception as e:
         st.error(f"Erro ao conectar com o Google Sheets: {e}")
@@ -38,17 +36,19 @@ st.caption("Alimentado automaticamente via n8n & Telegram")
 df = carregar_dados()
 
 if not df.empty:
-    # --- 1. BLOCO DE KPIs (CARDS METRICOS) ---
+    # --- 1. BLOCO DE KPIs (CARDS MÉTRICOS) ---
     col1, col2, col3 = st.columns(3)
     
     col1.metric("Total de Análises Processadas", len(df))
     
-    if "DATA" in df.columns and not df["DATA"].isnull().all():
-        ultima_data = df["DATA"].max().strftime("%d/%m/%Y %H:%M:%S")
+    # Busca a última data ignorando valores inválidos/nulos
+    datas_validas = df["DATA"].dropna() if "DATA" in df.columns else pd.Series()
+    if not datas_validas.empty:
+        ultima_data = datas_validas.max().strftime("%d/%m/%Y %H:%M:%S")
     else:
         ultima_data = "N/A"
+        
     col2.metric("Último Registro", ultima_data)
-    
     col3.metric("Status do Agente", "🟢 Operacional")
 
     st.divider()
@@ -89,10 +89,11 @@ if not df.empty:
         st.subheader("Base de Dados Completa")
         st.dataframe(df_filtrado, use_container_width=True)
         
-        # Gráfico de volume por dia caso haja registros de data
-        if "DATA" in df_filtrado.columns and len(df_filtrado) > 0:
+        # Gráfico de volume por dia considerando apenas datas válidas
+        df_grafico_dados = df_filtrado.dropna(subset=["DATA"]) if "DATA" in df_filtrado.columns else pd.DataFrame()
+        if not df_grafico_dados.empty:
             st.subheader("Volume de Análises por Dia")
-            df_grafico = df_filtrado.groupby(df_filtrado["DATA"].dt.date).size().reset_index(name="Análises")
+            df_grafico = df_grafico_dados.groupby(df_grafico_dados["DATA"].dt.date).size().reset_index(name="Análises")
             fig = px.bar(df_grafico, x="DATA", y="Análises", title="Quantidade de Relatórios Gerados")
             st.plotly_chart(fig, use_container_width=True)
 
