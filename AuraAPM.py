@@ -55,7 +55,7 @@ st.markdown("""
 
 # 3. URL da Planilha Google Sheets (CSV Público)
 # Certifique-se de substituir pelo seu link de exportação CSV público
-SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT5K760U3Q0h3k4F2B-bIqYQeS3B2E9mD0oW0eX7Z9/pub?output=csv"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1n5eYSf_Nt0Vs-qZ2yHeyqWuyJjl6SceYevAocJLmxTw/edit?usp=sharing"
 
 @st.cache_data(ttl=10)
 def carregar_dados(url):
