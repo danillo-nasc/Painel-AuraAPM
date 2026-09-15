@@ -209,6 +209,7 @@ with tab_war_room:
     
     st.dataframe(df_incidentes[colunas_tabela], use_container_width=True, hide_index=True)
 
+
 # ABA 2: GOVERNANÇA PREDITIVA DE OLA & CAPACIDADE
 with tab_governanca:
     st.subheader("🔮 Indicadores Preditivos de Capacidade & Metas Contratuais")
@@ -216,10 +217,24 @@ with tab_governanca:
     # 1. CARDS PREDITIVOS (D+1, D+7, P2, P3)
     p_c1, p_c2, p_c3, p_c4 = st.columns(4)
     
-    # Extração / Cálculo das projeções
     tot_inc = len(df_incidentes)
-    proj_d1 = int(df_sheets_raw["PREV_D1"].iloc[-1]) if "PREV_D1" in df_sheets_raw.columns else max(1, int(tot_inc * 0.85))
-    proj_d7 = int(df_sheets_raw["PREV_D7"].iloc[-1]) if "PREV_D7" in df_sheets_raw.columns else max(5, int(tot_inc * 5.2))
+    
+    # Leitura com fallback robusto
+    if "PREV_D1" in df_incidentes.columns and not df_incidentes["PREV_D1"].dropna().empty:
+        try:
+            proj_d1 = int(pd.to_numeric(df_incidentes["PREV_D1"], errors="coerce").dropna().iloc[-1])
+        except Exception:
+            proj_d1 = max(1, int(tot_inc * 0.85))
+    else:
+        proj_d1 = max(1, int(tot_inc * 0.85))
+
+    if "PREV_D7" in df_incidentes.columns and not df_incidentes["PREV_D7"].dropna().empty:
+        try:
+            proj_d7 = int(pd.to_numeric(df_incidentes["PREV_D7"], errors="coerce").dropna().iloc[-1])
+        except Exception:
+            proj_d7 = max(5, int(tot_inc * 5.2))
+    else:
+        proj_d7 = max(5, int(tot_inc * 5.2))
     
     p2_viol = int(((df_incidentes["prioridade"] == "alta") & (df_incidentes["status_governanca"] == "VIOLADO")).sum()) if "prioridade" in df_incidentes.columns else 0
     p3_viol = int(((df_incidentes["prioridade"] == "media") & (df_incidentes["status_governanca"] == "VIOLADO")).sum()) if "prioridade" in df_incidentes.columns else 0
@@ -287,7 +302,6 @@ with tab_governanca:
     with col_g2:
         st.markdown("##### 📈 Curva Preditiva de Incidentes (Histórico vs. D+7)")
         fig_trend = go.Figure()
-        # Traço Histórico Simulado/Real
         fig_trend.add_trace(go.Scatter(
             x=["D-3", "D-2", "D-1", "Hoje (Real)"],
             y=[max(1, int(tot_inc * 0.7)), max(2, int(tot_inc * 0.85)), max(2, int(tot_inc * 0.9)), tot_inc],
@@ -295,7 +309,6 @@ with tab_governanca:
             name="Histórico Real",
             line=dict(color="#1f6feb", width=3)
         ))
-        # Traço Preditivo D+1 a D+7
         fig_trend.add_trace(go.Scatter(
             x=["Hoje (Real)", "D+1", "D+3", "D+7"],
             y=[tot_inc, proj_d1, int((proj_d1 + proj_d7) / 2), proj_d7],
@@ -313,19 +326,26 @@ with tab_governanca:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 3. LINHA 2 DE GRÁFICOS: MTTR REAL VS OLA & DURAÇÃO TOTAL POR SERVIÇO
+    # 3. LINHA 2 DE GRÁFICOS: COMPARATIVO MTTR & DURAÇÃO POR SERVIÇO
     col_g3, col_g4 = st.columns(2)
 
     with col_g3:
         st.markdown("##### ⏱️ Comparativo: Duração Média Real vs. Limite de OLA (s)")
-        # Gráfico comparativo de barras lado a lado
-        df_comp = df_incidentes.groupby("prioridade")[["duracao_media_s", "ola_limite_s"]].mean().reset_index()
-        fig_comp = go.Figure(data=[
-            go.Bar(name='Duração Média Real', x=df_comp['prioridade'], y=df_comp['duracao_media_s'], marker_color='#E74C3C'),
-            go.Bar(name='Limite Máximo OLA', x=df_comp['prioridade'], y=df_comp['ola_limite_s'], marker_color='#2ECC71')
-        ])
-        fig_comp.update_layout(barmode='group', template="plotly_dark", height=340, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig_comp, use_container_width=True)
+        if "duracao_media_s" in df_incidentes.columns and "prioridade" in df_incidentes.columns:
+            cols_agg = ["duracao_media_s"]
+            if "ola_limite_s" in df_incidentes.columns:
+                cols_agg.append("ola_limite_s")
+            
+            df_comp = df_incidentes.groupby("prioridade")[cols_agg].mean().reset_index()
+            
+            fig_comp = go.Figure(data=[
+                go.Bar(name='Duração Média Real', x=df_comp['prioridade'], y=df_comp['duracao_media_s'], marker_color='#E74C3C')
+            ])
+            if "ola_limite_s" in df_comp.columns:
+                fig_comp.add_trace(go.Bar(name='Limite Máximo OLA', x=df_comp['prioridade'], y=df_comp['ola_limite_s'], marker_color='#2ECC71'))
+                
+            fig_comp.update_layout(barmode='group', template="plotly_dark", height=340, margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig_comp, use_container_width=True)
 
     with col_g4:
         st.markdown("##### 🏛️ Duração Acumulada de Indisponibilidade por Serviço (s)")
@@ -339,7 +359,7 @@ with tab_governanca:
             )
             fig_bar.update_layout(template="plotly_dark", height=340, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_bar, use_container_width=True)
-
+            
 # ABA 3: FINOPS & EFICIÊNCIA
 with tab_finops:
     st.subheader("Otimização Computacional e Combate à Fadiga de Alertas")
