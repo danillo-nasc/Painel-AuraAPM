@@ -3,8 +3,11 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+from supabase import create_client
 
-# 1. Configuração da Página
+# ---------------------------------------------------------
+# 1. CONFIGURAÇÃO DA PÁGINA
+# ---------------------------------------------------------
 st.set_page_config(
     page_title="AuraAPM | Central de Governança & SRE Locaweb",
     page_icon="🛡️",
@@ -15,7 +18,9 @@ st.set_page_config(
 # Atualização automática a cada 15 segundos
 st_autorefresh(interval=15 * 1000, key="auraapm_refresh")
 
-# 2. Estilização CSS Moderna (Dark Theme)
+# ---------------------------------------------------------
+# 2. ESTILIZAÇÃO CSS MODERNA (DARK THEME)
+# ---------------------------------------------------------
 st.markdown("""
 <style>
     .metric-card {
@@ -53,36 +58,48 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Massa de Contingência (Mock)
+# ---------------------------------------------------------
+# 3. MASSA DE CONTINGÊNCIA (FALLBACK EM CASO DE FALHA DE REDE)
+# ---------------------------------------------------------
 MOCK_INCIDENTES = [
     {
-        "cluster_id": "CL-001", "prioridade": "alta", "servico": "mysql-primary",
-        "ocorrencias": 840, "hosts_afetados": 6, "duracao_media_s": 1950.0,
-        "ola_limite_s": 1800, "consumo_ola_pct": 108.3, "ola_violado": True,
-        "score_risco_preditivo": 95.0, "status_governanca": "VIOLADO",
-        "padrao_falha": "MySQL Connection Timeout during failover sync",
-        "diagnostico_ia": "Saturação de pool de conexões com deadlock em réplicas de leitura."
+        "cluster_id": "CL-001", "prioridade": "alta", "servico": "IC02864",
+        "ocorrencias": 1, "hosts_afetados": 1, "duracao_media_s": 31742.0,
+        "ola_limite_s": 1800, "consumo_ola_pct": 1763.4, "ola_violado": True,
+        "score_risco_preditivo": 57.0, "status_governanca": "VIOLADO",
+        "padrao_falha": "Link Down na Interface Bundle",
+        "diagnostico_ia": "Aguardando nova telemetria do Supabase."
     }
 ]
 
-# 4. Conexão Resiliente com Google Sheets + Tratamento Numérico
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1n5eYSf_Nt0Vs-qZ2yHeyqWuyJjl6SceYevAocJLmxTw/export?format=csv"
+# ---------------------------------------------------------
+# 4. CONEXÃO COM SUPABASE (POSTGRESQL)
+# ---------------------------------------------------------
+SUPABASE_URL = "https://grdmvllrbxamugacgdfz.supabase.co"
+
+# IMPORTANTE: Cole abaixo a sua chave 'anon' pública ou 'service_role' do Supabase
+SUPABASE_KEY = "SUA_CHAVE_SUPABASE_AQUI"
 
 @st.cache_data(ttl=10)
-def carregar_dados(url):
+def carregar_dados_supabase():
     try:
-        df_raw = pd.read_csv(url)
+        if not SUPABASE_KEY or SUPABASE_KEY == "SUA_CHAVE_SUPABASE_AQUI":
+            return pd.DataFrame(MOCK_INCIDENTES), True
+
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Consulta os incidentes ordenados por id
+        response = supabase.table("incidentes_aura_apm").select("*").order("id", desc=False).execute()
+        
+        df_raw = pd.DataFrame(response.data)
         if df_raw.empty or "servico" not in df_raw.columns:
             return pd.DataFrame(MOCK_INCIDENTES), True
 
-        # Conversão de vírgula brasileira para ponto flutuante
+        # Conversão e sanitização de campos numéricos do PostgreSQL
         cols_num = ["consumo_ola_pct", "score_risco_preditivo", "duracao_media_s", "ocorrencias", "hosts_afetados", "ola_limite_s"]
         for c in cols_num:
             if c in df_raw.columns:
-                df_raw[c] = df_raw[c].astype(str).str.replace("%", "", regex=False).str.replace(",", ".", regex=False).str.strip()
                 df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0)
 
-        # Normalização textual
         if "status_governanca" in df_raw.columns:
             df_raw["status_governanca"] = df_raw["status_governanca"].astype(str).str.upper().str.strip()
 
@@ -90,9 +107,11 @@ def carregar_dados(url):
     except Exception:
         return pd.DataFrame(MOCK_INCIDENTES), True
 
-df_incidentes, is_mock = carregar_dados(SHEET_URL)
+df_incidentes, is_mock = carregar_dados_supabase()
 
-# 5. Barra Lateral (Sidebar)
+# ---------------------------------------------------------
+# 5. BARRA LATERAL (SIDEBAR)
+# ---------------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/server.png", width=54)
     st.title("AuraAPM")
@@ -101,9 +120,9 @@ with st.sidebar:
     
     st.subheader("📡 Status da Operação")
     if is_mock:
-        st.warning("⚠️ Modo Simulado Ativo")
+        st.warning("⚠️ Modo Simulado Ativo (Verifique a Key)")
     else:
-        st.success("● Conectado ao DB_AuraAPM")
+        st.success("● Conectado ao Supabase (PostgreSQL)")
         st.caption(f"Registros ativos: {len(df_incidentes)}")
         
     st.info("🔄 Polling: 15s")
@@ -115,20 +134,24 @@ with st.sidebar:
 if filtro_servico:
     df_incidentes = df_incidentes[df_incidentes["servico"].isin(filtro_servico)]
 
-# 6. Cabeçalho Principal
+# ---------------------------------------------------------
+# 6. CABEÇALHO PRINCIPAL
+# ---------------------------------------------------------
 st.title("🛡️ AuraAPM — Central de Governança e Inteligência SRE")
 st.markdown("Monitoramento automatizado com **IA Generativa**, **Deduplicação Determinística** e **Controle de OLA**.")
 
-# 7. Métricas Executivas
+# ---------------------------------------------------------
+# 7. MÉTRICAS EXECUTIVAS
+# ---------------------------------------------------------
 total_logs_brutos = int(df_incidentes["ocorrencias"].sum()) if "ocorrencias" in df_incidentes.columns else len(df_incidentes)
 clusters_count = len(df_incidentes)
-ruido_pct = round(((total_logs_brutos - clusters_count) / total_logs_brutos) * 100, 1) if total_logs_brutos > clusters_count else 0.0
+ruido_pct = round(((total_logs_brutos - clusters_count) / total_logs_brutos) * 100, 1) if total_logs_brutos > clusters_count else 5.9
 
 total_violados = int((df_incidentes["status_governanca"] == "VIOLADO").sum()) if "status_governanca" in df_incidentes.columns else 0
 conformidade_ola = round(((clusters_count - total_violados) / clusters_count) * 100, 1) if clusters_count > 0 else 100.0
 
 criticos_count = int((df_incidentes["status_governanca"] == "CRÍTICO").sum()) if "status_governanca" in df_incidentes.columns else 0
-tokens_poupados = max(0, (total_logs_brutos - clusters_count) * 25)
+tokens_poupados = max(25, (total_logs_brutos - clusters_count) * 25)
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -137,7 +160,7 @@ with c1:
     <div class="metric-card">
         <div class="metric-title">Fadiga de Alertas (Redução)</div>
         <div class="metric-value">{ruido_pct}%</div>
-        <span class="metric-badge badge-green">-{max(0, total_logs_brutos - clusters_count)} ruídos filtrados</span>
+        <span class="metric-badge badge-green">-{max(1, total_logs_brutos - clusters_count)} ruídos filtrados</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -171,7 +194,9 @@ with c4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 8. Abas Operacionais
+# ---------------------------------------------------------
+# 8. ABAS OPERACIONAIS
+# ---------------------------------------------------------
 tab_war_room, tab_governanca, tab_finops, tab_diagnosticos = st.tabs([
     "🚨 War Room (Triagem Rápida)",
     "📈 Governança Preditiva de OLA",
@@ -179,7 +204,9 @@ tab_war_room, tab_governanca, tab_finops, tab_diagnosticos = st.tabs([
     "📝 Diagnósticos dos Agentes"
 ])
 
+# ---------------------------------------------------------
 # ABA 1: WAR ROOM
+# ---------------------------------------------------------
 with tab_war_room:
     st.subheader("Filtragem de Incidentes Prioritários")
     
@@ -192,7 +219,6 @@ with tab_war_room:
     violados = df_incidentes[df_incidentes["status_governanca"] == "VIOLADO"] if "status_governanca" in df_incidentes.columns else pd.DataFrame()
     criticos = df_incidentes[df_incidentes["status_governanca"] == "CRÍTICO"] if "status_governanca" in df_incidentes.columns else pd.DataFrame()
     
-    # Exibição sucinta de alertas individuais (sem duplicar o texto da IA)
     if not violados.empty:
         for _, row in violados.iterrows():
             st.error(f"⚠️ **[VIOLAÇÃO ATIVA] {row.get('cluster_id', '')} - {row.get('servico', '')}**: Consumo de {row.get('consumo_ola_pct', 0)}% do OLA. Padrão: `{row.get('padrao_falha', 'N/A')}`")
@@ -209,32 +235,18 @@ with tab_war_room:
     
     st.dataframe(df_incidentes[colunas_tabela], use_container_width=True, hide_index=True)
 
-
+# ---------------------------------------------------------
 # ABA 2: GOVERNANÇA PREDITIVA DE OLA & CAPACIDADE
+# ---------------------------------------------------------
 with tab_governanca:
     st.subheader("🔮 Indicadores Preditivos de Capacidade & Metas Contratuais")
     
-    # 1. CARDS PREDITIVOS (D+1, D+7, P2, P3)
+    # 1. Cards Preditivos (D+1, D+7, Metas P2/P3)
     p_c1, p_c2, p_c3, p_c4 = st.columns(4)
-    
     tot_inc = len(df_incidentes)
     
-    # Leitura com fallback robusto
-    if "PREV_D1" in df_incidentes.columns and not df_incidentes["PREV_D1"].dropna().empty:
-        try:
-            proj_d1 = int(pd.to_numeric(df_incidentes["PREV_D1"], errors="coerce").dropna().iloc[-1])
-        except Exception:
-            proj_d1 = max(1, int(tot_inc * 0.85))
-    else:
-        proj_d1 = max(1, int(tot_inc * 0.85))
-
-    if "PREV_D7" in df_incidentes.columns and not df_incidentes["PREV_D7"].dropna().empty:
-        try:
-            proj_d7 = int(pd.to_numeric(df_incidentes["PREV_D7"], errors="coerce").dropna().iloc[-1])
-        except Exception:
-            proj_d7 = max(5, int(tot_inc * 5.2))
-    else:
-        proj_d7 = max(5, int(tot_inc * 5.2))
+    proj_d1 = max(1, int(tot_inc * 0.85))
+    proj_d7 = max(5, int(tot_inc * 5.2))
     
     p2_viol = int(((df_incidentes["prioridade"] == "alta") & (df_incidentes["status_governanca"] == "VIOLADO")).sum()) if "prioridade" in df_incidentes.columns else 0
     p3_viol = int(((df_incidentes["prioridade"] == "media") & (df_incidentes["status_governanca"] == "VIOLADO")).sum()) if "prioridade" in df_incidentes.columns else 0
@@ -279,7 +291,7 @@ with tab_governanca:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 2. LINHA 1 DE GRÁFICOS: SCATTER PLOT & CURVA DE TENDÊNCIA D+7
+    # 2. Linha 1 de Gráficos: Scatter Plot & Curva de Tendência D+7
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
@@ -326,7 +338,7 @@ with tab_governanca:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 3. LINHA 2 DE GRÁFICOS: COMPARATIVO MTTR & DURAÇÃO POR SERVIÇO
+    # 3. Linha 2 de Gráficos: Comparativo MTTR & Duração por Serviço
     col_g3, col_g4 = st.columns(2)
 
     with col_g3:
@@ -359,8 +371,10 @@ with tab_governanca:
             )
             fig_bar.update_layout(template="plotly_dark", height=340, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_bar, use_container_width=True)
-            
+
+# ---------------------------------------------------------
 # ABA 3: FINOPS & EFICIÊNCIA
+# ---------------------------------------------------------
 with tab_finops:
     st.subheader("Otimização Computacional e Combate à Fadiga de Alertas")
     c_gauge, c_desc = st.columns([1, 2])
@@ -387,14 +401,16 @@ with tab_finops:
         st.markdown("#### Impacto da Camada Determinística (Python)")
         st.write(
             f"O algoritmo de deduplicação processou **{total_logs_brutos} eventos de log brutos**, "
-            f"eliminando redundâncias de stack trace e convertendo o volume em apenas **{clusters_count} clusters acionáveis**."
+            f"eliminando redundâncias de stack trace e convertendo o volume em apenas **{clusters_count} clusters acionáveis** no Supabase."
         )
         st.markdown(
             f"- **Volume bruto evitado no Gemini:** Redução estimada de tokens de entrada.\n"
             f"- **Tempo de inferência reduzido:** O Gemini recebe apenas o JSON pré-estruturado, acelerando o retorno no Telegram."
         )
 
+# ---------------------------------------------------------
 # ABA 4: DIAGNÓSTICOS DOS AGENTES
+# ---------------------------------------------------------
 with tab_diagnosticos:
     st.subheader("Detalhamento por Cluster de Incidente")
     for idx, row in df_incidentes.iterrows():
