@@ -73,28 +73,24 @@ MOCK_INCIDENTES = [
 ]
 
 # ---------------------------------------------------------
-# 4. CONEXÃO COM SUPABASE (POSTGRESQL)
+# 4. CONEXÃO COM SUPABASE (VIA STREAMLIT SECRETS)
 # ---------------------------------------------------------
-SUPABASE_URL = "https://grdmvllrbxamugacgdfz.supabase.co"
-
-# IMPORTANTE: Cole abaixo a sua chave 'anon' pública ou 'service_role' do Supabase
-SUPABASE_KEY = "SUA_CHAVE_SUPABASE_AQUI"
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://grdmvllrbxamugacgdfz.supabase.co")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
 @st.cache_data(ttl=10)
 def carregar_dados_supabase():
     try:
-        if not SUPABASE_KEY or SUPABASE_KEY == "SUA_CHAVE_SUPABASE_AQUI":
+        if not SUPABASE_KEY:
             return pd.DataFrame(MOCK_INCIDENTES), True
 
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Consulta os incidentes ordenados por id
         response = supabase.table("incidentes_aura_apm").select("*").order("id", desc=False).execute()
         
         df_raw = pd.DataFrame(response.data)
         if df_raw.empty or "servico" not in df_raw.columns:
             return pd.DataFrame(MOCK_INCIDENTES), True
 
-        # Conversão e sanitização de campos numéricos do PostgreSQL
         cols_num = ["consumo_ola_pct", "score_risco_preditivo", "duracao_media_s", "ocorrencias", "hosts_afetados", "ola_limite_s"]
         for c in cols_num:
             if c in df_raw.columns:
