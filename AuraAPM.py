@@ -53,56 +53,44 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Massa de Dados de Contingência (Mock)
+# 3. Massa de Contingência (Mock)
 MOCK_INCIDENTES = [
     {
-        "cluster_id": "CL-a8f3b1", "prioridade": "alta", "servico": "mysql-primary",
+        "cluster_id": "CL-001", "prioridade": "alta", "servico": "mysql-primary",
         "ocorrencias": 840, "hosts_afetados": 6, "duracao_media_s": 1950.0,
         "ola_limite_s": 1800, "consumo_ola_pct": 108.3, "ola_violado": True,
         "score_risco_preditivo": 95.0, "status_governanca": "VIOLADO",
         "padrao_falha": "MySQL Connection Timeout during failover sync",
-        "diagnostico_ia": "Saturação de pool de conexões com deadlock cascata em réplicas de leitura."
-    },
-    {
-        "cluster_id": "CL-3c4d12", "prioridade": "alta", "servico": "dns-authoritative",
-        "ocorrencias": 320, "hosts_afetados": 2, "duracao_media_s": 1350.0,
-        "ola_limite_s": 1800, "consumo_ola_pct": 75.0, "ola_violado": False,
-        "score_risco_preditivo": 78.5, "status_governanca": "CRÍTICO",
-        "padrao_falha": "ICMP/DNS resolution dropped packets",
-        "diagnostico_ia": "Queda intermitente em links de borda atingindo 75% da janela limite de OLA."
-    },
-    {
-        "cluster_id": "CL-7b89f0", "prioridade": "media", "servico": "letsencrypt-auto",
-        "ocorrencias": 190, "hosts_afetados": 1, "duracao_media_s": 4200.0,
-        "ola_limite_s": 14400, "consumo_ola_pct": 29.2, "ola_violado": False,
-        "score_risco_preditivo": 42.0, "status_governanca": "CONTROLADO",
-        "padrao_falha": "Rate limit exceeded on SSL certificate renewal",
-        "diagnostico_ia": "Renovação agendada em fila única; impacto restrito e OLA sob controle."
-    },
-    {
-        "cluster_id": "CL-0e1f3a", "prioridade": "baixa", "servico": "bacula-backup",
-        "ocorrencias": 70, "hosts_afetados": 4, "duracao_media_s": 12000.0,
-        "ola_limite_s": 86400, "consumo_ola_pct": 13.9, "ola_violado": False,
-        "score_risco_preditivo": 22.0, "status_governanca": "CONTROLADO",
-        "padrao_falha": "I/O wait threshold elevated during nightly tape dump",
-        "diagnostico_ia": "Rotina batch dentro do limiar de dispersão esperado."
+        "diagnostico_ia": "Saturação de pool de conexões com deadlock em réplicas de leitura."
     }
 ]
 
-# 4. Conexão Resiliente com Google Sheets
+# 4. Conexão Resiliente com Google Sheets + Tratamento Numérico
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1n5eYSf_Nt0Vs-qZ2yHeyqWuyJjl6SceYevAocJLmxTw/export?format=csv"
 
 @st.cache_data(ttl=10)
 def carregar_dados(url):
     try:
         df_raw = pd.read_csv(url)
-        if df_raw.empty or len(df_raw.columns) < 3:
-            return pd.DataFrame(MOCK_INCIDENTES), True, df_raw
-        return df_raw, False, df_raw
-    except Exception:
-        return pd.DataFrame(MOCK_INCIDENTES), True, pd.DataFrame()
+        if df_raw.empty or "servico" not in df_raw.columns:
+            return pd.DataFrame(MOCK_INCIDENTES), True
 
-df_incidentes, is_mock, df_sheets_raw = carregar_dados(SHEET_URL)
+        # Conversão de vírgula brasileira para ponto flutuante
+        cols_num = ["consumo_ola_pct", "score_risco_preditivo", "duracao_media_s", "ocorrencias", "hosts_afetados", "ola_limite_s"]
+        for c in cols_num:
+            if c in df_raw.columns:
+                df_raw[c] = df_raw[c].astype(str).str.replace("%", "", regex=False).str.replace(",", ".", regex=False).str.strip()
+                df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0)
+
+        # Normalização textual
+        if "status_governanca" in df_raw.columns:
+            df_raw["status_governanca"] = df_raw["status_governanca"].astype(str).str.upper().str.strip()
+
+        return df_raw, False
+    except Exception:
+        return pd.DataFrame(MOCK_INCIDENTES), True
+
+df_incidentes, is_mock = carregar_dados(SHEET_URL)
 
 # 5. Barra Lateral (Sidebar)
 with st.sidebar:
@@ -114,14 +102,15 @@ with st.sidebar:
     st.subheader("📡 Status da Operação")
     if is_mock:
         st.warning("⚠️ Modo Simulado Ativo")
-        st.caption("Apresentando dados estruturados de contingência.")
     else:
         st.success("● Conectado ao DB_AuraAPM")
         st.caption(f"Registros ativos: {len(df_incidentes)}")
         
     st.info("🔄 Polling: 15s")
     st.markdown("---")
-    filtro_servico = st.multiselect("Filtrar por Serviço:", options=df_incidentes["servico"].unique(), default=[])
+    
+    servicos_disponiveis = sorted(df_incidentes["servico"].dropna().unique()) if "servico" in df_incidentes.columns else []
+    filtro_servico = st.multiselect("Filtrar por Serviço:", options=servicos_disponiveis, default=[])
 
 if filtro_servico:
     df_incidentes = df_incidentes[df_incidentes["servico"].isin(filtro_servico)]
@@ -130,16 +119,16 @@ if filtro_servico:
 st.title("🛡️ AuraAPM — Central de Governança e Inteligência SRE")
 st.markdown("Monitoramento automatizado com **IA Generativa**, **Deduplicação Determinística** e **Controle de OLA**.")
 
-# 7. Cálculo das Métricas de Topo (Alinhadas aos 4 Desafios Locaweb)
-total_logs_brutos = int(df_incidentes["ocorrencias"].sum()) if "ocorrencias" in df_incidentes.columns else 1420
+# 7. Métricas Executivas
+total_logs_brutos = int(df_incidentes["ocorrencias"].sum()) if "ocorrencias" in df_incidentes.columns else len(df_incidentes)
 clusters_count = len(df_incidentes)
-ruido_pct = round(((total_logs_brutos - clusters_count) / total_logs_brutos) * 100, 1) if total_logs_brutos > 0 else 99.0
+ruido_pct = round(((total_logs_brutos - clusters_count) / total_logs_brutos) * 100, 1) if total_logs_brutos > clusters_count else 0.0
 
 total_violados = int((df_incidentes["status_governanca"] == "VIOLADO").sum()) if "status_governanca" in df_incidentes.columns else 0
 conformidade_ola = round(((clusters_count - total_violados) / clusters_count) * 100, 1) if clusters_count > 0 else 100.0
 
 criticos_count = int((df_incidentes["status_governanca"] == "CRÍTICO").sum()) if "status_governanca" in df_incidentes.columns else 0
-tokens_poupados = (total_logs_brutos - clusters_count) * 25  # Estimativa de tokens economizados
+tokens_poupados = max(0, (total_logs_brutos - clusters_count) * 25)
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -148,7 +137,7 @@ with c1:
     <div class="metric-card">
         <div class="metric-title">Fadiga de Alertas (Redução)</div>
         <div class="metric-value">{ruido_pct}%</div>
-        <span class="metric-badge badge-green">-{total_logs_brutos - clusters_count} ruídos filtrados</span>
+        <span class="metric-badge badge-green">-{max(0, total_logs_brutos - clusters_count)} ruídos filtrados</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -194,16 +183,23 @@ tab_war_room, tab_governanca, tab_finops, tab_diagnosticos = st.tabs([
 with tab_war_room:
     st.subheader("Filtragem de Incidentes Prioritários")
     
+    # Exibe o diagnóstico executivo da IA uma única vez no topo
+    if "diagnostico_ia" in df_incidentes.columns and df_incidentes["diagnostico_ia"].dropna().any():
+        ultimo_diagnostico = df_incidentes["diagnostico_ia"].dropna().iloc[-1]
+        with st.expander("🤖 Parecer Preditivo do Agente Gemini (Última Execução)", expanded=True):
+            st.markdown(ultimo_diagnostico)
+
     violados = df_incidentes[df_incidentes["status_governanca"] == "VIOLADO"] if "status_governanca" in df_incidentes.columns else pd.DataFrame()
     criticos = df_incidentes[df_incidentes["status_governanca"] == "CRÍTICO"] if "status_governanca" in df_incidentes.columns else pd.DataFrame()
     
+    # Exibição sucinta de alertas individuais (sem duplicar o texto da IA)
     if not violados.empty:
         for _, row in violados.iterrows():
-            st.error(f"⚠️ **[VIOLAÇÃO ATIVA] {row['cluster_id']} - {row['servico']}**: Consumo de {row['consumo_ola_pct']}% do OLA. {row.get('diagnostico_ia', '')}")
+            st.error(f"⚠️ **[VIOLAÇÃO ATIVA] {row.get('cluster_id', '')} - {row.get('servico', '')}**: Consumo de {row.get('consumo_ola_pct', 0)}% do OLA. Padrão: `{row.get('padrao_falha', 'N/A')}`")
             
     if not criticos.empty:
         for _, row in criticos.iterrows():
-            st.warning(f"⚡ **[RISCO PREDITIVO ELEVADO] {row['cluster_id']} - {row['servico']}**: Score {row['score_risco_preditivo']}/100. Consumo de {row['consumo_ola_pct']}% do OLA.")
+            st.warning(f"⚡ **[RISCO PREDITIVO ELEVADO] {row.get('cluster_id', '')} - {row.get('servico', '')}**: Score {row.get('score_risco_preditivo', 0)}/100. Consumo de {row.get('consumo_ola_pct', 0)}% do OLA.")
 
     st.markdown("### Matriz Operacional Consolidada")
     colunas_tabela = [c for c in [
@@ -224,7 +220,7 @@ with tab_governanca:
                 df_incidentes,
                 x="consumo_ola_pct",
                 y="score_risco_preditivo",
-                size="ocorrencias",
+                size="ocorrencias" if "ocorrencias" in df_incidentes.columns else None,
                 color="status_governanca",
                 color_discrete_map={"VIOLADO": "#E74C3C", "CRÍTICO": "#F39C12", "CONTROLADO": "#2ECC71"},
                 hover_name="servico",
@@ -241,7 +237,7 @@ with tab_governanca:
                 df_incidentes,
                 x="servico",
                 y="duracao_media_s",
-                color="prioridade",
+                color="prioridade" if "prioridade" in df_incidentes.columns else None,
                 title="Duração Média dos Incidentes por Serviço (s)",
                 labels={"duracao_media_s": "Duração Média (segundos)", "servico": "Componente"}
             )
@@ -278,14 +274,14 @@ with tab_finops:
             f"eliminando redundâncias de stack trace e convertendo o volume em apenas **{clusters_count} clusters acionáveis**."
         )
         st.markdown(
-            f"- **Volume bruto evitado no Gemini:** Redução de ~{tokens_poupados:,} tokens por execução.\n"
+            f"- **Volume bruto evitado no Gemini:** Redução estimada de tokens de entrada.\n"
             f"- **Tempo de inferência reduzido:** O Gemini recebe apenas o JSON pré-estruturado, acelerando o retorno no Telegram."
         )
 
 # ABA 4: DIAGNÓSTICOS DOS AGENTES
 with tab_diagnosticos:
-    st.subheader("Histórico de Análises Geradas pela IA")
+    st.subheader("Detalhamento por Cluster de Incidente")
     for idx, row in df_incidentes.iterrows():
         with st.expander(f"📌 {row.get('cluster_id', 'Cluster')} - {row.get('servico', 'Serviço')} (Status: {row.get('status_governanca', 'N/A')})"):
             st.markdown(f"**Padrão de Falha Identificado:** `{row.get('padrao_falha', 'N/A')}`")
-            st.markdown(f"**Diagnóstico Preditivo:** {row.get('diagnostico_ia', 'Sem análise textual registrada.')}")
+            st.markdown(f"**Duração Média:** `{row.get('duracao_media_s', 0)} segundos` | **Consumo de OLA:** `{row.get('consumo_ola_pct', 0)}%`")
